@@ -1,1 +1,11 @@
-*,log
+# Downloaded artifacts and logs
+cache/
+logs/
+tools/
+
+# Version marker (created in InstallPath, not here)
+.fivem-artifact-version
+
+# Windows
+Thumbs.db
+Desktop.ini

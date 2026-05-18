@@ -1,21 +1,21 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Hämtar FiveM server-artifact, extraherar, avblockerar filer och startar FXServer.
+    Downloads FiveM server artifacts, extracts, unblocks files, and starts FXServer.
 
 .PARAMETER Channel
-    Latest = högsta build-numret på master
-    Recommended = märkt "LATEST RECOMMENDED" (stabilt)
-    Optional = märkt "LATEST OPTIONAL"
+    Latest = highest build number on master
+    Recommended = marked "LATEST RECOMMENDED" (stable)
+    Optional = marked "LATEST OPTIONAL"
 
 .PARAMETER Force
-    Ladda ner och installera även om samma version redan finns.
+    Download and install even if the same version is already installed.
 
 .PARAMETER StartServer
-    Starta FXServer efter uppdatering (standard om -CheckOnlyOnStartup är false i config).
+    Start FXServer after updating.
 
 .PARAMETER InstallStartupTask
-    Registrera schemalagd uppgift som körs vid systemstart.
+    Register a scheduled task that runs at system startup.
 
 .EXAMPLE
     .\Update-FiveMServer.ps1 -Channel Recommended
@@ -54,7 +54,7 @@ function Write-Log {
 function Get-Config {
     param([string] $Path)
     if (-not (Test-Path -LiteralPath $Path)) {
-        throw "Config saknas: $Path"
+        throw "Config not found: $Path"
     }
     $cfg = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     if ($Channel) { $cfg.Channel = $Channel }
@@ -76,7 +76,7 @@ function Get-SevenZipExecutable {
     New-Item -ItemType Directory -Path $toolsDir -Force | Out-Null
     $sevenZip = Join-Path $toolsDir '7zr.exe'
     if (-not (Test-Path -LiteralPath $sevenZip)) {
-        Write-Log "Laddar ner 7zr.exe (krävs för att packa upp server.7z)..."
+        Write-Log "Downloading 7zr.exe (required to extract server.7z)..."
         $zipUrl = 'https://www.7-zip.org/a/7zr.exe'
         Invoke-WebRequest -Uri $zipUrl -OutFile $sevenZip -UseBasicParsing
         Unblock-File -LiteralPath $sevenZip -ErrorAction SilentlyContinue
@@ -102,7 +102,7 @@ function Get-ArtifactFolderFromButton {
         [string] $Html,
         [string] $Label
     )
-  # Sök bakåt från knapptexten så vi inte råkar koppla RECOMMENDED till OPTIONAL-länken.
+  # Search backward from the button label so RECOMMENDED is not matched to the OPTIONAL link.
     $needle = "LATEST $Label"
     $idx = $Html.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase)
     if ($idx -lt 0) { return $null }
@@ -125,16 +125,16 @@ function Resolve-ArtifactFolder {
         'Recommended' {
             $hit = Get-ArtifactFolderFromButton -Html $Html -Label 'RECOMMENDED'
             if ($hit) { return $hit }
-            throw 'Kunde inte hitta LATEST RECOMMENDED på artifacts-sidan.'
+            throw 'Could not find LATEST RECOMMENDED on the artifacts page.'
         }
         'Optional' {
             $hit = Get-ArtifactFolderFromButton -Html $Html -Label 'OPTIONAL'
             if ($hit) { return $hit }
-            throw 'Kunde inte hitta LATEST OPTIONAL på artifacts-sidan.'
+            throw 'Could not find LATEST OPTIONAL on the artifacts page.'
         }
         default {
             if (-not $Folders -or $Folders.Count -eq 0) {
-                throw 'Inga artifacts hittades på master-branchen.'
+                throw 'No artifacts found on the master branch.'
             }
             return $Folders[0]
         }
@@ -146,7 +146,7 @@ function Stop-FxServer {
     $procs = Get-CimInstance Win32_Process -Filter "Name='FXServer.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -like "$InstallPath*") }
     foreach ($proc in $procs) {
-        Write-Log "Stoppar FXServer (PID $($proc.ProcessId))..."
+        Write-Log "Stopping FXServer (PID $($proc.ProcessId))..."
         Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
     }
@@ -154,7 +154,7 @@ function Stop-FxServer {
 
 function Unblock-FiveMFiles {
     param([string] $Path)
-    Write-Log "Avblockerar filer i $Path (tar bort 'Blockerad från internet')..."
+    Write-Log "Unblocking files in $Path (removes 'Blocked from internet')..."
     Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
         ForEach-Object {
             Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue
@@ -165,7 +165,7 @@ function Start-FxServer {
     param($Config)
     $exe = Join-Path $Config.InstallPath 'FXServer.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
-        throw "FXServer.exe saknas: $exe"
+        throw "FXServer.exe not found: $exe"
     }
 
     $args = @('+set', 'serverProfile', $Config.ServerProfile)
@@ -176,7 +176,7 @@ function Start-FxServer {
         $args += ($Config.ExtraFxServerArgs -split '\s+')
     }
 
-    Write-Log "Startar FXServer med profil '$($Config.ServerProfile)'..."
+    Write-Log "Starting FXServer with profile '$($Config.ServerProfile)'..."
     Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory $Config.InstallPath
 }
 
@@ -196,13 +196,13 @@ function Install-StartupScheduledTask {
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest
 
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-    Write-Log "Schemalagd uppgift registrerad: $taskName (kanal: $($Config.Channel), fördröjning ${delay}s vid uppstart)"
+    Write-Log "Scheduled task registered: $taskName (channel: $($Config.Channel), ${delay}s delay on startup)"
 }
 
 function Remove-StartupScheduledTask {
     $taskName = 'FiveM_Server_AutoUpdate_Start'
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Log "Schemalagd uppgift borttagen (om den fanns): $taskName"
+    Write-Log "Scheduled task removed (if it existed): $taskName"
 }
 
 try {
@@ -214,7 +214,7 @@ try {
     }
 
     $script:LogFile = Join-Path $config.LogPath ("fivem-updater_{0}.log" -f (Get-Date -Format 'yyyyMMdd'))
-    Write-Log "FiveM artifact-uppdatering startar (kanal: $($config.Channel))"
+    Write-Log "FiveM artifact update starting (channel: $($config.Channel))"
 
     if ($RemoveStartupTask) {
         Remove-StartupScheduledTask
@@ -235,23 +235,23 @@ try {
 
     $shouldUpdate = $Force -or ($installedVersion -ne $artifactFolder)
     if (-not $shouldUpdate -and $config.CheckOnlyOnStartup) {
-        Write-Log "Redan på build $buildNumber ($artifactFolder). Ingen uppdatering behövs."
+        Write-Log "Already on build $buildNumber ($artifactFolder). No update needed."
         $shouldStart = $StartServer -or (-not $config.CheckOnlyOnStartup -and $config.StartServerAfterUpdate)
         if ($shouldStart) {
             $running = Get-Process -Name 'FXServer' -ErrorAction SilentlyContinue |
                 Where-Object { $_.Path -like "$($config.InstallPath)*" }
             if (-not $running) { Start-FxServer -Config $config }
-            else { Write-Log 'FXServer körs redan.' }
+            else { Write-Log 'FXServer is already running.' }
         }
         return
     }
 
     if (-not $shouldUpdate) {
-        Write-Log "Ingen ny version. Installerad: $installedVersion"
+        Write-Log "No new version. Installed: $installedVersion"
         return
     }
 
-    Write-Log "Ny artifact: $artifactFolder (build $buildNumber)"
+    Write-Log "New artifact: $artifactFolder (build $buildNumber)"
 
     if ($config.StopRunningServerBeforeUpdate) {
         Stop-FxServer -InstallPath $config.InstallPath
@@ -259,12 +259,12 @@ try {
 
     $downloadUrl = "{0}/{1}/server.7z" -f $config.ArtifactBaseUrl.TrimEnd('/'), $artifactFolder
     $archivePath = Join-Path $config.CachePath ("server_{0}.7z" -f $artifactFolder)
-    Write-Log "Laddar ner $downloadUrl"
+    Write-Log "Downloading $downloadUrl"
     Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
     Unblock-File -LiteralPath $archivePath -ErrorAction SilentlyContinue
 
     $sevenZip = Get-SevenZipExecutable
-    Write-Log "Extraherar till $($config.InstallPath) ..."
+    Write-Log "Extracting to $($config.InstallPath) ..."
     $extractArgs = @(
         'x', $archivePath,
         "-o$($config.InstallPath)",
@@ -272,7 +272,7 @@ try {
     )
     $proc = Start-Process -FilePath $sevenZip -ArgumentList $extractArgs -Wait -PassThru -NoNewWindow
     if ($proc.ExitCode -ne 0) {
-        throw "7-Zip misslyckades med exit code $($proc.ExitCode)"
+        throw "7-Zip failed with exit code $($proc.ExitCode)"
     }
 
     if ($config.UnblockFiles) {
@@ -280,7 +280,7 @@ try {
     }
 
     Set-Content -LiteralPath $versionFile -Value $artifactFolder -NoNewline
-    Write-Log "Uppdatering klar. Version sparad: $artifactFolder"
+    Write-Log "Update complete. Version saved: $artifactFolder"
 
     $shouldStart = $StartServer -or $config.StartServerAfterUpdate
     if ($shouldStart) {
