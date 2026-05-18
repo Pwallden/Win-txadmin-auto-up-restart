@@ -1,0 +1,15 @@
+{
+  "ArtifactBaseUrl": "https://runtime.fivem.net/artifacts/fivem/build_server_windows/master",
+  "Channel": "Recommended",
+  "InstallPath": "C:\\Server\\TXAdmin",
+  "ServerProfile": "AtTheMomentRolePlay",
+  "TxAdminPort": null,
+  "ExtraFxServerArgs": "",
+  "CachePath": "C:\\Server\\scripts\\cache",
+  "LogPath": "C:\\Server\\scripts\\logs",
+  "StartupDelaySeconds": 120,
+  "CheckOnlyOnStartup": true,
+  "StartServerAfterUpdate": true,
+  "UnblockFiles": true,
+  "StopRunningServerBeforeUpdate": true
+}
