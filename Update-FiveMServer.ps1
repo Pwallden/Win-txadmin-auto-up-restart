@@ -161,6 +161,13 @@ function Unblock-FiveMFiles {
         }
 }
 
+function Test-FxServerRunning {
+    param([string] $InstallPath)
+    $running = Get-Process -Name 'FXServer' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "$InstallPath*" }
+    return [bool]$running
+}
+
 function Start-FxServer {
     param($Config)
     $exe = Join-Path $Config.InstallPath 'FXServer.exe'
@@ -178,6 +185,20 @@ function Start-FxServer {
 
     Write-Log "Starting FXServer with profile '$($Config.ServerProfile)'..."
     Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory $Config.InstallPath
+}
+
+function Start-FxServerIfNeeded {
+    param(
+        $Config,
+        [bool] $ShouldStart
+    )
+    if (-not $ShouldStart) { return $false }
+    if (Test-FxServerRunning -InstallPath $Config.InstallPath) {
+        Write-Log 'FXServer is already running.'
+        return $true
+    }
+    Start-FxServer -Config $Config
+    return $true
 }
 
 function Install-StartupScheduledTask {
@@ -225,70 +246,87 @@ try {
         return
     }
 
-    $html = Get-ArtifactIndexHtml -BaseUrl $config.ArtifactBaseUrl
-    $folders = @(Get-BuildFolders -Html $html)
-    $artifactFolder = Resolve-ArtifactFolder -Html $html -ChannelName $config.Channel -Folders $folders
-    $buildNumber = ($artifactFolder -split '-')[0]
-    $versionFile = Join-Path $config.InstallPath '.fivem-artifact-version'
-    $installedVersion = if (Test-Path -LiteralPath $versionFile) { Get-Content -LiteralPath $versionFile -Raw } else { '' }
-    $installedVersion = $installedVersion.Trim()
+    $shouldStartAfterUpdate = $StartServer -or [bool]$config.StartServerAfterUpdate
+    $shouldStartWhenCurrent = $StartServer -or (-not [bool]$config.CheckOnlyOnStartup -and [bool]$config.StartServerAfterUpdate)
+    $updateFailed = $false
 
-    $shouldUpdate = $Force -or ($installedVersion -ne $artifactFolder)
-    if (-not $shouldUpdate -and $config.CheckOnlyOnStartup) {
-        Write-Log "Already on build $buildNumber ($artifactFolder). No update needed."
-        $shouldStart = $StartServer -or (-not $config.CheckOnlyOnStartup -and $config.StartServerAfterUpdate)
-        if ($shouldStart) {
-            $running = Get-Process -Name 'FXServer' -ErrorAction SilentlyContinue |
-                Where-Object { $_.Path -like "$($config.InstallPath)*" }
-            if (-not $running) { Start-FxServer -Config $config }
-            else { Write-Log 'FXServer is already running.' }
+    try {
+        $html = Get-ArtifactIndexHtml -BaseUrl $config.ArtifactBaseUrl
+        $folders = @(Get-BuildFolders -Html $html)
+        $artifactFolder = Resolve-ArtifactFolder -Html $html -ChannelName $config.Channel -Folders $folders
+        $buildNumber = ($artifactFolder -split '-')[0]
+        $versionFile = Join-Path $config.InstallPath '.fivem-artifact-version'
+        $installedVersion = if (Test-Path -LiteralPath $versionFile) { Get-Content -LiteralPath $versionFile -Raw } else { '' }
+        $installedVersion = $installedVersion.Trim()
+
+        $shouldUpdate = $Force -or ($installedVersion -ne $artifactFolder)
+        if (-not $shouldUpdate) {
+            Write-Log "Already on build $buildNumber ($artifactFolder). No update needed."
+            Start-FxServerIfNeeded -Config $config -ShouldStart $shouldStartWhenCurrent | Out-Null
+            return
         }
-        return
+
+        Write-Log "New artifact: $artifactFolder (build $buildNumber)"
+
+        if ($config.StopRunningServerBeforeUpdate) {
+            Stop-FxServer -InstallPath $config.InstallPath
+        }
+
+        $downloadUrl = "{0}/{1}/server.7z" -f $config.ArtifactBaseUrl.TrimEnd('/'), $artifactFolder
+        $archivePath = Join-Path $config.CachePath ("server_{0}.7z" -f $artifactFolder)
+        Write-Log "Downloading $downloadUrl"
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
+        Unblock-File -LiteralPath $archivePath -ErrorAction SilentlyContinue
+
+        $sevenZip = Get-SevenZipExecutable
+        Write-Log "Extracting to $($config.InstallPath) ..."
+        $extractArgs = @(
+            'x', $archivePath,
+            "-o$($config.InstallPath)",
+            '-y', '-aoa'
+        )
+        $proc = Start-Process -FilePath $sevenZip -ArgumentList $extractArgs -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) {
+            throw "7-Zip failed with exit code $($proc.ExitCode)"
+        }
+
+        if ($config.UnblockFiles) {
+            Unblock-FiveMFiles -Path $config.InstallPath
+        }
+
+        Set-Content -LiteralPath $versionFile -Value $artifactFolder -NoNewline
+        Write-Log "Update complete. Version saved: $artifactFolder"
+
+        Start-FxServerIfNeeded -Config $config -ShouldStart $shouldStartAfterUpdate | Out-Null
+    }
+    catch {
+        $updateFailed = $true
+        Write-Log $_.Exception.Message 'ERROR'
+        if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace 'ERROR' }
+        Write-Log 'Artifact update/check failed. Falling back to starting the existing FXServer install if requested.' 'WARN'
+
+        if (-not $shouldStartAfterUpdate) {
+            exit 1
+        }
+
+        try {
+            Start-FxServerIfNeeded -Config $config -ShouldStart $true | Out-Null
+            Write-Log 'FXServer start fallback completed after update failure.' 'WARN'
+        }
+        catch {
+            Write-Log $_.Exception.Message 'ERROR'
+            if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace 'ERROR' }
+            exit 1
+        }
     }
 
-    if (-not $shouldUpdate) {
-        Write-Log "No new version. Installed: $installedVersion"
-        return
-    }
-
-    Write-Log "New artifact: $artifactFolder (build $buildNumber)"
-
-    if ($config.StopRunningServerBeforeUpdate) {
-        Stop-FxServer -InstallPath $config.InstallPath
-    }
-
-    $downloadUrl = "{0}/{1}/server.7z" -f $config.ArtifactBaseUrl.TrimEnd('/'), $artifactFolder
-    $archivePath = Join-Path $config.CachePath ("server_{0}.7z" -f $artifactFolder)
-    Write-Log "Downloading $downloadUrl"
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
-    Unblock-File -LiteralPath $archivePath -ErrorAction SilentlyContinue
-
-    $sevenZip = Get-SevenZipExecutable
-    Write-Log "Extracting to $($config.InstallPath) ..."
-    $extractArgs = @(
-        'x', $archivePath,
-        "-o$($config.InstallPath)",
-        '-y', '-aoa'
-    )
-    $proc = Start-Process -FilePath $sevenZip -ArgumentList $extractArgs -Wait -PassThru -NoNewWindow
-    if ($proc.ExitCode -ne 0) {
-        throw "7-Zip failed with exit code $($proc.ExitCode)"
-    }
-
-    if ($config.UnblockFiles) {
-        Unblock-FiveMFiles -Path $config.InstallPath
-    }
-
-    Set-Content -LiteralPath $versionFile -Value $artifactFolder -NoNewline
-    Write-Log "Update complete. Version saved: $artifactFolder"
-
-    $shouldStart = $StartServer -or $config.StartServerAfterUpdate
-    if ($shouldStart) {
-        Start-FxServer -Config $config
+    if ($updateFailed) {
+        # Server may be running on the previous build; keep exit 0 so boot tasks are not marked failed.
+        Write-Log 'Finished with update failure but FXServer start was attempted.' 'WARN'
     }
 }
 catch {
     Write-Log $_.Exception.Message 'ERROR'
-  if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace 'ERROR' }
+    if ($_.ScriptStackTrace) { Write-Log $_.ScriptStackTrace 'ERROR' }
     exit 1
 }

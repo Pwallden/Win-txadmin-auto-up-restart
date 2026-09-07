@@ -13,6 +13,7 @@ Ideal for dedicated Windows servers that need FXServer kept up to date and start
 - Stops running `FXServer.exe` before updating (configurable)
 - Starts the server with your chosen `serverProfile`
 - Can register as a scheduled task on **Windows startup**
+- If the artifact check/download fails (DNS/network), still starts the existing FXServer when start is requested
 - Downloads portable `7zr.exe` automatically if 7-Zip is not installed
 - Logs to `logs/`
 
